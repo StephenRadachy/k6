@@ -27,6 +27,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	neturl "net/url"
 	"reflect"
 	"strconv"
@@ -43,8 +44,9 @@ import (
 )
 
 var (
-	typeString = reflect.TypeOf("")
-	typeURLTag = reflect.TypeOf(URLTag{})
+	typeString                     = reflect.TypeOf("")
+	typeURLTag                     = reflect.TypeOf(URLTag{})
+	typeMapKeyStringValueInterface = reflect.TypeOf(map[string]interface{}{})
 )
 
 type HTTPResponseTimings struct {
@@ -60,6 +62,7 @@ type HTTPResponse struct {
 	Status     int
 	Proto      string
 	Headers    map[string]string
+	Cookies    map[string][]*http.Cookie
 	Body       string
 	Timings    HTTPResponseTimings
 	Error      string
@@ -148,6 +151,66 @@ func (*HTTP) request(ctx context.Context, rt *goja.Runtime, state *common.State,
 			params := paramsV.ToObject(rt)
 			for _, k := range params.Keys() {
 				switch k {
+				case "cookies":
+					var cookieJar *cookiejar.Jar
+					if state.CookieJar == nil {
+						continue
+					}
+					cookieJar = state.CookieJar
+					cookiesV := params.Get(k)
+					if goja.IsUndefined(cookiesV) || goja.IsNull(cookiesV) {
+						continue
+					}
+					cookies := cookiesV.ToObject(rt)
+					if cookies == nil {
+						continue
+					}
+					var cookiesList []*http.Cookie
+					switch cookies.ExportType() {
+					case typeMapKeyStringValueInterface:
+						for _, key := range cookies.Keys() {
+							c := http.Cookie{
+								Name:  key,
+								Value: cookies.Get(key).String(),
+							}
+							cookiesList = append(cookiesList, &c)
+						}
+					default:
+						for _, i := range cookies.Keys() {
+							c := http.Cookie{}
+							obj := cookies.Get(i).ToObject(rt)
+							for _, key := range obj.Keys() {
+								switch strings.ToLower(key) {
+								case "name":
+									c.Name = obj.Get(key).String()
+								case "value":
+									c.Value = obj.Get(key).String()
+								case "path":
+									c.Path = obj.Get(key).String()
+								case "domain":
+									c.Domain = obj.Get(key).String()
+								case "expires":
+									var t time.Time
+									expires := obj.Get(key).String()
+									if expires != "" {
+										t, err = time.Parse(time.RFC1123, expires)
+										if err != nil {
+											return nil, nil, errors.Errorf("unable to parse \"expires\" date string \"%s\" with: %s", expires, err.Error())
+										}
+									}
+									c.Expires = t
+								case "maxage":
+									c.MaxAge = int(obj.Get(key).ToInteger())
+								case "secure":
+									c.Secure = obj.Get(key).ToBoolean()
+								case "httponly":
+									c.HttpOnly = obj.Get(key).ToBoolean()
+								}
+							}
+							cookiesList = append(cookiesList, &c)
+						}
+					}
+					cookieJar.SetCookies(req.URL, cookiesList)
 				case "headers":
 					headersV := params.Get(k)
 					if goja.IsUndefined(headersV) || goja.IsNull(headersV) {
@@ -243,6 +306,12 @@ func (*HTTP) request(ctx context.Context, rt *goja.Runtime, state *common.State,
 		resp.Headers = make(map[string]string, len(res.Header))
 		for k, vs := range res.Header {
 			resp.Headers[k] = strings.Join(vs, ", ")
+		}
+
+		resCookies := client.Jar.Cookies(res.Request.URL)
+		resp.Cookies = make(map[string][]*http.Cookie, len(resCookies))
+		for _, c := range resCookies {
+			resp.Cookies[c.Name] = append(resp.Cookies[c.Name], c)
 		}
 	}
 
