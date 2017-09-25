@@ -62,7 +62,7 @@ type HTTPResponse struct {
 	Status     int
 	Proto      string
 	Headers    map[string]string
-	Cookies    map[string][]*http.Cookie
+	Cookies    map[string][]string
 	Body       string
 	Timings    HTTPResponseTimings
 	Error      string
@@ -314,9 +314,9 @@ func (*HTTP) request(ctx context.Context, rt *goja.Runtime, state *common.State,
 		} else {
 			resCookies = []*http.Cookie{}
 		}
-		resp.Cookies = make(map[string][]*http.Cookie, len(resCookies))
+		resp.Cookies = make(map[string][]string, len(resCookies))
 		for _, c := range resCookies {
-			resp.Cookies[c.Name] = append(resp.Cookies[c.Name], c)
+			resp.Cookies[c.Name] = append(resp.Cookies[c.Name], c.Value)
 		}
 	}
 
